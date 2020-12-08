@@ -23,6 +23,77 @@ namespace simple_router {
 
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
+void
+SimpleRouter::processARPPkt(const arp_hdr *arpHdr, const Interface *inface) {
+    //Actually we don't need to check this, because the mac has been checked before that
+    if (arpHdr->arp_tip != inface->ip) {
+        return;
+    } 
+    auto op_code = ntohs(arpHdr->arp_op);
+    if (op_code == arp_op_request) {
+        std::cerr << "Now sending a arp reply..." << std::endl;
+
+        Buffer replyPkt(sizeof(ethernet_hdr) + sizeof(arp_hdr));
+        //ethernet_hdr
+        ethernet_hdr replyEthHdr{};
+        std::memcpy(replyEthHdr.ether_shost, inface->addr.data(), ETHER_ADDR_LEN);
+        std::memcpy(replyEthHdr.ether_dhost, arpHdr->arp_sha, ETHER_ADDR_LEN);
+        replyEthHdr.ether_type = htons(ethertype_arp);
+        // arp_hdr
+        arp_hdr reply_arp_hdr{
+                .arp_hrd = htons(arp_hrd_ethernet),
+                .arp_pro = htons(ethertype_ip),
+                .arp_hln = ETHER_ADDR_LEN,
+                .arp_pln = 4,
+                .arp_op = htons(arp_op_reply),
+        };
+        std::memcpy(reply_arp_hdr.arp_sha, inface->addr.data(), ETHER_ADDR_LEN);
+        reply_arp_hdr.arp_sip = inface->ip;
+        std::memcpy(reply_arp_hdr.arp_tha, arpHdr->arp_sha, ETHER_ADDR_LEN);
+        reply_arp_hdr.arp_tip = arpHdr->arp_sip;
+
+        std::memcpy(replyPkt.data(), &replyEthHdr, sizeof(ethernet_hdr));
+        std::memcpy(replyPkt.data() + sizeof(ethernet_hdr), &reply_arp_hdr, sizeof(arp_hdr));
+
+        sendPacket(replyPkt, inface->name);
+//            print_hdrs(replyPkt);
+
+        // In fact, when receiving this arp request, the mapping of mac and ip should also be added to the cache
+//            Buffer mac(ETHER_ADDR_LEN);
+//            std::memcpy(mac.data(), arpHdr->arp_sha, ETHER_ADDR_LEN);
+//            auto req = m_arp.insertArpEntry(mac, arpHdr->arp_sip);
+    } else if (op_code == arp_op_reply) {
+        std::cerr << "Now handling a arp reply..." << std::endl;
+
+        // Store the mapping of mac and ip
+        Buffer mac(ETHER_ADDR_LEN);
+        std::memcpy(mac.data(), arpHdr->arp_sha, ETHER_ADDR_LEN);
+        auto req = m_arp.insertArpEntry(mac, arpHdr->arp_sip);
+
+        // Check if there are waiting packages
+        if (req == nullptr) {
+            return;
+        }
+
+        // Send all pending packets on the req->packets linked list
+        for (auto &packet : req->packets) {
+            ethernet_hdr tmp{};
+            std::memcpy(&tmp, packet.packet.data(), sizeof(ethernet_hdr));
+            // Reset ethernet_hdr
+            // the dest is the source, the source is the target
+            memcpy(tmp.ether_dhost, arpHdr->arp_sha, ETHER_ADDR_LEN);
+            memcpy(tmp.ether_shost, arpHdr->arp_tha, ETHER_ADDR_LEN);
+
+            std::memcpy(packet.packet.data(), &tmp, sizeof(ethernet_hdr));
+            sendPacket(packet.packet, packet.iface);
+        }
+        // Remove all queued requests
+        m_arp.removeRequest(req);
+    }
+}
+
+
+
 // IMPLEMENT THIS METHOD
 void
 SimpleRouter::handlePacket(const Buffer& packet, const std::string& inIface, int nat_flag)

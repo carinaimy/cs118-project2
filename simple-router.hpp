@@ -121,6 +121,12 @@ private:
 
   friend class Router;
   pox::PacketInjectorPrx m_pox;
+
+   // process arp packet
+    void processARPPkt(const arp_hdr* arpHdr, const Interface* inface);
+
+    
+
 };
 
 inline const RoutingTable&
