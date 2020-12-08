@@ -32,7 +32,79 @@ ArpCache::periodicCheckArpRequestsAndCacheEntries()
 {
 
   // FILL THIS IN
+  //  for each request in queued requests
+  for (auto it = m_arpRequests.begin(); it != m_arpRequests.end(); it++) {
+      // handleRequest(request)
+      time_point current = steady_clock::now();
+      auto req = *it;
+      //  or the request has been sent out at least 5 times.
+      if (req->nTimesSent >= MAX_SENT_TIME) {
+          m_arpRequests.remove(req);
+          it--;
+          continue;
+      }
 
+      if(current - req->timeSent < seconds(ARP_INTERVAL_SEC)){
+          continue;
+      }
+
+      // The router should send an ARP request about once a second
+      // until an ARP reply comes back
+      req->nTimesSent += 1;
+
+      // Search interface to send req
+      // Map ip to mac
+      auto route = m_router.getRoutingTable().lookup(req->ip);
+      auto outIface = m_router.findIfaceByName(route.ifName);
+      if (outIface == nullptr) {
+          std::cerr << "out interface error." << std::endl;
+          continue;
+      }
+
+      // the ethernet header of the arp request
+      ethernet_hdr ethernetHdr{};
+      // broadcast
+      std::memset(ethernetHdr.ether_dhost, 255, ETHER_ADDR_LEN);
+      std::memcpy(ethernetHdr.ether_shost, outIface->addr.data(), ETHER_ADDR_LEN);
+      //only dispatch Ethernet frames (their payload) carrying ARP and IPv4 packets.
+      ethernetHdr.ether_type = htons(ethertype_arp);
+
+      // the arp header of the arp request
+      arp_hdr arpHdr{};
+      arpHdr.arp_hrd = htons(arp_hrd_ethernet);
+      arpHdr.arp_pro = htons(ethertype_ip);
+      //number of octets in the specified hardware address. Ethernet has
+      //6-octet addresses, so 0x06.
+      arpHdr.arp_hln = 0x06;
+      //number of octets in the requested network address. IPv4 has
+      //4-octet addresses, so 0x04.
+      arpHdr.arp_pln = 0x04;
+      // ARP request
+      arpHdr.arp_op = htons(arp_op_request);
+      std::memcpy(arpHdr.arp_sha, outIface->addr.data(), ETHER_ADDR_LEN);
+      arpHdr.arp_sip = outIface->ip;
+      std::memset(arpHdr.arp_tha, 0, ETHER_ADDR_LEN);
+      arpHdr.arp_tip = req->ip;
+
+      // push the data of headers to buffer
+      Buffer buffer(sizeof(ethernetHdr) + sizeof(arpHdr));
+      std::memcpy(buffer.data(), &ethernetHdr, sizeof(ethernetHdr));
+      std::memcpy(buffer.data() + sizeof(ethernetHdr), &arpHdr, sizeof(arpHdr));
+
+      // broadcast arp request
+      std::cerr << "Send arp request to " << outIface->name << "..." << std::endl;
+      m_router.sendPacket(buffer, outIface->name);
+      // update the time sent
+      req->timeSent = steady_clock::now();
+  }
+
+  //for each cache entry in entries:
+  for(auto it = m_cacheEntries.begin(); it != m_cacheEntries.end(); it++){
+      if(!(*it)->isValid){
+          it = m_cacheEntries.erase(it);
+          it--;
+      }
+  }
 }
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////

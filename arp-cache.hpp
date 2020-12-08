@@ -34,6 +34,7 @@ using steady_clock = std::chrono::steady_clock;
 using time_point = std::chrono::steady_clock::time_point;
 using seconds = std::chrono::seconds;
 
+const int ARP_INTERVAL_SEC = 1;
 const seconds SR_ARPCACHE_TO = seconds(30);
 const uint32_t MAX_SENT_TIME = 5;
 
