@@ -125,7 +125,17 @@ private:
    // process arp packet
     void processARPPkt(const arp_hdr* arpHdr, const Interface* inface);
 
-    
+    // process ip packet
+    void processIPPkt(const Buffer& packet, const std::string& inface, int nat_flag);
+
+    // reply icmp
+    void sendICMPReply(const Buffer& requestPacket, const std::string& inface);
+
+    //
+    uint32_t find_ex_ip(uint32_t in_ip);
+
+    // forward the ip packet
+    int forwardIPPkt(Buffer& packet);
 
 };
 

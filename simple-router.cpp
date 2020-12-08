@@ -92,6 +92,26 @@ SimpleRouter::processARPPkt(const arp_hdr *arpHdr, const Interface *inface) {
     }
 }
 
+uint32_t
+SimpleRouter::find_ex_ip(uint32_t in_ip) {
+    for (const auto &iface : m_ifaces) {
+        auto route = m_routingTable.lookup(iface.ip);
+        // This is a default route
+        // Use the unused interface as external ip
+        if (route.dest == 0) {
+            return iface.ip;
+        }
+    }
+
+    for (const auto &iface : m_ifaces) {
+        auto route = m_routingTable.lookup(iface.ip);
+        // Choose an interface at will
+        if (route.dest != in_ip && route.gw != in_ip) {
+            return iface.ip;
+        }
+    }
+    return 0;
+}
 
 
 // IMPLEMENT THIS METHOD
