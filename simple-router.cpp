@@ -114,22 +114,260 @@ SimpleRouter::find_ex_ip(uint32_t in_ip) {
 }
 
 
+void
+SimpleRouter::processIPPkt(const Buffer &packet, const std::string &inface, int nat_flag) {
+    //check length
+    if (packet.size() - sizeof(ethernet_hdr) < sizeof(ip_hdr)) {
+        std::cerr << "Error length and ignore it" << std::endl;
+        return;
+    }
+
+    //check cksum
+    ip_hdr ip_header{};
+    std::memcpy(&ip_header, packet.data() + sizeof(ethernet_hdr), sizeof(ip_hdr));
+    if (cksum(&ip_header, sizeof(ip_hdr)) != 0xffff) {
+        std::cerr << "Error checksum and ignore it" << std::endl;
+        return;
+    }
+
+    // NAT
+    // Convert internal ip to external ip. Convert external ip to internal ip
+    uint32_t dest_ip = ip_header.ip_dst;
+    bool nat_modify = false;
+    if (nat_flag == 1) {
+        auto *in_iface = findIfaceByName(inface);
+        auto ip_h = (ip_hdr *) (packet.data() + sizeof(ethernet_hdr));
+        auto icmp_header = (icmp_hdr *) (packet.data() + sizeof(ethernet_hdr) + sizeof(ip_hdr));
+        auto id = icmp_header->icmp_id;
+        uint32_t in_ip=0, ex_ip=0;
+        // to find the nat entry
+        auto nat_entry = m_natTable.lookup(id);
+        if (nat_entry != nullptr) {
+            in_ip = nat_entry->internal_ip;
+            ex_ip = nat_entry->external_ip;
+            nat_entry->timeUsed = steady_clock::now();
+        }
+        // Out of NAT
+        if (icmp_header->icmp_type == 8) {
+            printIfaces(std::cerr);
+            if (nat_entry == nullptr) {
+                in_ip = in_iface->ip;
+                // Find a suitable external interface and ip
+                ex_ip = find_ex_ip(in_ip);
+                if (ex_ip == 0) {
+                    std::cerr << "!!!!!There is no suitable interface for external ip!!!!" << std::endl;
+                    return;
+                } else {
+                    std::cerr << "find ex_ip: " << ipToString(ex_ip) << std::endl;
+                }
+            }
+            // receives from the client (10.0.1.100) through the internal interface (10.0.1.1),
+            // change the source IP address in the IP header to the external interface address (172.32.10.1)
+//                if(ex_ip != ip_h->ip_dst){
+            if(findIfaceByIp(ip_h->ip_dst) == nullptr){
+                // insert the external ip and the internal ip or update the time
+                m_natTable.insertNatEntry(id, in_ip, ex_ip);
+                ip_h->ip_src = ex_ip;
+                nat_modify = true;
+            }
+
+        } else if (nat_entry != nullptr) {
+            // icmp reply and with the nat id(key)
+            // In this case, the destination IP address should be
+            // changed from 172.32.10.1 to 10.0.1.1, so that the client can receive the PING responses.
+            ip_h->ip_dst = in_ip;
+            nat_modify = true;
+            // changed from 172.32.10.1 to 10.0.1.1, so that the client can receive the PING responses.
+            auto route = m_routingTable.lookup(in_ip);
+            ip_h->ip_dst = route.gw;
+        }
+        std::cerr << "in_ip: " << ipToString(in_ip) << std::endl;
+        std::cerr << "ex_ip: " << ipToString(ex_ip) << std::endl;
+        dest_ip = ip_h->ip_dst;
+        std::cerr << std::endl;
+        std::cerr << "After NAT: " << std::endl;
+//            print_hdrs(packet);
+    }
+
+
+    // Your router should classify datagrams into (1) destined to the router (to one of
+    // the IP addresses of the router), and (2) datagrams to be forwarded:
+    const Interface *dst_iface = findIfaceByIp(dest_ip);
+    // to one of the IP addresses of the router
+    if (dst_iface && !nat_modify) {
+        //  For (1), if the packet carries ICMP payload, it should be properly
+        //  dispatched. Otherwise, discarded.
+        std::cerr << "get the ICMP for this router" << std::endl;
+        auto *icmpH = (icmp_hdr *) (packet.data() + sizeof(ethernet_hdr) + sizeof(ip_hdr));
+        // 8: echo message
+        // 0: echo reply message (Because the router will not actively ping, it cannot be 0)
+        if (icmpH->icmp_type != 8) {
+            std::cerr << "icmp_type is :" << icmpH->icmp_type << std::endl;
+//                print_hdrs(packet);
+            return;
+        }
+        sendICMPReply(packet, inface);
+    } else {
+        std::cerr << "Now forwarding" << std::endl;
+        // For (2), your router should use the longest prefix match algorithm to find a
+        // next-hop IP address in the routing table and attempt to forward it there
+
+        // Your router should discard the packet if TTL equals 0 after decrementing it.
+        if (ip_header.ip_ttl - 1 <= 0) {
+            return;
+        }
+        Buffer forward_pkt(packet.size());
+        std::memcpy(forward_pkt.data(), packet.data(), packet.size());
+
+        forwardIPPkt(forward_pkt);
+    }
+}
+
+void
+SimpleRouter::sendICMPReply(const Buffer &requestPacket, const std::string &inface) {
+    std::cerr << "Sending icmp Echo Reply" << std::endl;
+
+    auto iface = findIfaceByName(inface);
+    //the header information of request packet
+    Buffer replyPkt(requestPacket.size());
+    memcpy(replyPkt.data(), requestPacket.data(), requestPacket.size());
+
+    // Set the ethernet hdr
+    auto *req_eth_hdr = (ethernet_hdr *) (requestPacket.data());
+    ethernet_hdr reply_eth_hdr{};
+    memcpy(reply_eth_hdr.ether_dhost, req_eth_hdr->ether_shost, ETHER_ADDR_LEN);
+    memcpy(reply_eth_hdr.ether_shost, iface->addr.data(), ETHER_ADDR_LEN);
+    reply_eth_hdr.ether_type = req_eth_hdr->ether_type;
+    memcpy(replyPkt.data(), &reply_eth_hdr, sizeof(ethernet_hdr));
+
+    // Set the ip header
+    auto *req_ip_hdr = (ip_hdr *) ((uint8_t *) requestPacket.data() + sizeof(ethernet_hdr));
+    req_ip_hdr->ip_len = htons(requestPacket.size() - (sizeof(ethernet_hdr)));
+    req_ip_hdr->ip_ttl = 64;
+    req_ip_hdr->ip_p = ip_protocol_icmp;
+    uint32_t tmp = req_ip_hdr->ip_dst;
+    req_ip_hdr->ip_dst = req_ip_hdr->ip_src;
+    req_ip_hdr->ip_src = tmp;
+    req_ip_hdr->ip_sum = 0;
+    req_ip_hdr->ip_sum = cksum((const void *) req_ip_hdr, sizeof(ip_hdr));
+    memcpy(replyPkt.data() + sizeof(ethernet_hdr), req_ip_hdr, sizeof(ip_hdr));
+
+    // Set the icmp header
+    auto *req_icmp_hdr = (icmp_hdr *) ((uint8_t *) requestPacket.data() + sizeof(ethernet_hdr) + sizeof(ip_hdr));
+    icmp_hdr reply_icmp_hdr{
+            .icmp_type = 0,   // 0: reply
+            .icmp_code = 0,
+            .icmp_sum = 0,
+            .icmp_id = req_icmp_hdr->icmp_id,
+            .icmp_seq = req_icmp_hdr->icmp_seq
+    };
+    reply_icmp_hdr.icmp_sum = cksum((const void *) &reply_icmp_hdr,
+                                    requestPacket.size() - (sizeof(ethernet_hdr)) - (sizeof(ip_hdr)));
+    memcpy(replyPkt.data() + sizeof(ethernet_hdr) + sizeof(ip_hdr), &reply_icmp_hdr, sizeof(icmp_hdr));
+
+    // Setting the head is complete
+    // Steps to send
+    auto nextHop = m_routingTable.lookup(req_ip_hdr->ip_dst);
+    if (m_arp.lookup(nextHop.gw) == nullptr) {
+        // no arp
+        std::cerr << "No mapping between ip: " << req_ip_hdr->ip_dst <<
+                  " and its MAC.\nBegin to request" << std::endl;
+        m_arp.queueRequest(req_ip_hdr->ip_dst, replyPkt, iface->name);
+        m_arp.periodicCheckArpRequestsAndCacheEntries();
+        return;
+    }
+    sendPacket(replyPkt, iface->name);
+    std::cerr << "Reply ICMP OK" << std::endl;
+}
+
+int
+SimpleRouter::forwardIPPkt(Buffer &packet) {
+    // Modify ip header
+    auto *ip_headr = (struct ip_hdr *) (packet.data() + sizeof(ethernet_hdr));
+    ip_headr->ip_ttl -= 1;
+    ip_headr->ip_sum = 0;
+    ip_headr->ip_sum = cksum((const void *) ip_headr, sizeof(ip_hdr));
+    RoutingTableEntry route_entry = m_routingTable.lookup(ip_headr->ip_dst);
+
+    // Find the outgoing interface
+    auto *out_iface = findIfaceByName(route_entry.ifName);
+    if (out_iface == nullptr) {
+        std::cerr << "No outgoing interface." << std::endl;
+        return -1;
+    }
+
+    //Modify the ethernet header
+    auto eth_headr = (struct ethernet_hdr *) (packet.data());
+    std::memcpy(eth_headr->ether_shost, out_iface->addr.data(), ETHER_ADDR_LEN);
+    eth_headr->ether_type = htons(ethertype_ip);
+
+    auto next_iface = m_arp.lookup(route_entry.gw);
+    if (next_iface == nullptr) // Did not find IP-MAC mapping in arp cache
+    {
+        auto req = m_arp.queueRequest(ip_headr->ip_dst, packet, out_iface->name);
+        req->nTimesSent = 0;
+        // Send out arp request
+        // Now it’s okay not to send arp, because the timer will send arp every second
+        // But the value of the first RTT will be large (maybe > 1000ms).
+        // should lock, but it's private
+        m_arp.periodicCheckArpRequestsAndCacheEntries();
+        return -1;
+    }
+
+    std::memcpy(eth_headr->ether_dhost, next_iface->mac.data(), ETHER_ADDR_LEN);
+
+    std::cerr << "Forwarded packet: " << std::endl;
+//        print_hdrs(packet);
+    sendPacket(packet, out_iface->name);
+    std::cerr << "Forwarded the packet to " << out_iface->name << std::endl;
+    return 0;
+}
+
 // IMPLEMENT THIS METHOD
 void
-SimpleRouter::handlePacket(const Buffer& packet, const std::string& inIface, int nat_flag)
-{
-  std::cerr << "Got packet of size " << packet.size() << " on interface " << inIface << std::endl;
+SimpleRouter::handlePacket(const Buffer &packet, const std::string &inIface, int nat_flag) {
+    std::cerr << "Got packet of size " << packet.size() << " on interface " << inIface << std::endl;
 
-  const Interface* iface = findIfaceByName(inIface);
-  if (iface == nullptr) {
-    std::cerr << "Received packet, but interface is unknown, ignoring" << std::endl;
-    return;
-  }
+    const Interface *iface = findIfaceByName(inIface);
+    if (iface == nullptr) {
+        std::cerr << "Received packet, but interface is unknown, ignoring" << std::endl;
+        return;
+    }
 
-  std::cerr << getRoutingTable() << std::endl;
+    std::cerr << getRoutingTable() << std::endl;
 
-  // FILL THIS IN
+    // FILL THIS IN
+    std::cerr << "-----------packet information begin----------------" << std::endl;
+//        print_hdrs(packet);
 
+    // not NAT
+    // get the ethernet headers.
+    auto *ethHdr = (ethernet_hdr *) (packet.data());
+
+    Buffer destMacAddr(ETHER_ADDR_LEN);
+    std::memcpy(destMacAddr.data(), ethHdr->ether_dhost, ETHER_ADDR_LEN);
+    std::string destMacAddrStr = macToString(destMacAddr);
+
+    // Check if the dest mac is correct
+    if (destMacAddrStr != "ff:ff:ff:ff:ff:ff" && destMacAddrStr != macToString(iface->addr)) {
+        return;
+    }
+    //  the router must ignore Ethernet frames other than ARP and IPv4.
+    auto eth_type = ntohs(ethHdr->ether_type);
+    if (eth_type == ethertype_arp) // process arp packet
+    {
+        std::cerr << "Received an ARP packet" << std::endl;
+        // Packet length error
+        if (packet.size() < sizeof(ethernet_hdr) + sizeof(arp_hdr)) {
+            return;
+        }
+        auto arpHdr = (arp_hdr *) (packet.data() + sizeof(ethernet_hdr));
+        processARPPkt(arpHdr, iface);
+    } else if (eth_type == ethertype_ip) { // process IP packet
+        std::cerr << "Received an IP packet" << std::endl;
+        processIPPkt(packet, inIface, nat_flag);
+    }
+    std::cerr << "-----------packet information end----------------" << std::endl << std::endl;
 }
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////

@@ -33,6 +33,9 @@ public:
 
   SimpleRouter();
 
+
+
+
   /**
    * IMPLEMENT THIS METHOD
    *
@@ -122,7 +125,8 @@ private:
   friend class Router;
   pox::PacketInjectorPrx m_pox;
 
-   // process arp packet
+
+    // process arp packet
     void processARPPkt(const arp_hdr* arpHdr, const Interface* inface);
 
     // process ip packet
@@ -136,7 +140,6 @@ private:
 
     // forward the ip packet
     int forwardIPPkt(Buffer& packet);
-
 };
 
 inline const RoutingTable&
