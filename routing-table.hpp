@@ -23,49 +23,47 @@
 
 namespace simple_router {
 
-struct RoutingTableEntry
-{
-  uint32_t dest;
-  uint32_t gw;
-  uint32_t mask;
-  std::string ifName;
-};
+    struct RoutingTableEntry {
+        uint32_t dest;
+        uint32_t gw;
+        uint32_t mask;
+        std::string ifName;
+    };
 
 /**
  * Routing table of the simple router
  */
-class RoutingTable
-{
-public:
-  /**
-   * IMPLEMENT THIS METHOD
-   *
-   * This method should lookup a proper entry in the routing table
-   * using "longest-prefix match" algorithm
-   *
-   * If routing table not found, `throw std::runtime_error("Routing entry not found")`
-   */
-  RoutingTableEntry
-  lookup(uint32_t ip) const;
+    class RoutingTable {
+    public:
+        /**
+         * IMPLEMENT THIS METHOD
+         *
+         * This method should lookup a proper entry in the routing table
+         * using "longest-prefix match" algorithm
+         *
+         * If routing table not found, `throw std::runtime_error("Routing entry not found")`
+         */
+        RoutingTableEntry
+        lookup(uint32_t ip) const;
 
-  bool
-  load(const std::string& file);
+        bool
+        load(const std::string &file);
 
-  void
-  addEntry(RoutingTableEntry entry);
+        void
+        addEntry(RoutingTableEntry entry);
 
-private:
-  std::list<RoutingTableEntry> m_entries;
+    private:
+        std::list<RoutingTableEntry> m_entries;
 
-  friend std::ostream&
-  operator<<(std::ostream& os, const RoutingTable& table);
-};
+        friend std::ostream &
+        operator<<(std::ostream &os, const RoutingTable &table);
+    };
 
-std::ostream&
-operator<<(std::ostream& os, const RoutingTableEntry& entry);
+    std::ostream &
+    operator<<(std::ostream &os, const RoutingTableEntry &entry);
 
-std::ostream&
-operator<<(std::ostream& os, const RoutingTable& table);
+    std::ostream &
+    operator<<(std::ostream &os, const RoutingTable &table);
 
 } // namespace simple_router
 
