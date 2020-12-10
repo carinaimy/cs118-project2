@@ -349,9 +349,10 @@ namespace simple_router {
         std::string destMacAddrStr = macToString(destMacAddr);
 
         // Check if the dest mac is correct
-        if (destMacAddrStr != "ff:ff:ff:ff:ff:ff" && destMacAddrStr != macToString(iface->addr)) {
+        if (destMacAddrStr != "ff:ff:ff:ff:ff:ff" && destMacAddrStr != "FF:FF:FF:FF:FF:FF" && destMacAddrStr != macToString(iface->addr)) {
             return;
         }
+
         //  the router must ignore Ethernet frames other than ARP and IPv4.
         auto eth_type = ntohs(ethHdr->ether_type);
         if (eth_type == ethertype_arp) // process arp packet
