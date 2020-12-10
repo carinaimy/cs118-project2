@@ -14,7 +14,8 @@
  * If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "simple-router.hpp"
+//#include "simple-router.hpp"
+#include "../simple-router.hpp"
 
 #include <Ice/Ice.h>
 #include <IceUtil/IceUtil.h>
